@@ -310,8 +310,9 @@ function renderMemberList() {
       const plan = planOf(name, d), rep = repMap.get(name + "|" + d);
       const dayCls = d === "9/6" ? "d2" : "";
       const target = plan ? `目標 <b>${plan.k}K</b> · ${plan.group}組` : `未排`;
+      const diff = rep && plan && rep.k !== plan.k;
       const actual = rep
-        ? `<div class="actual">${rep.k}K <small>(${rep.actualKm}K)</small></div>
+        ? `<div class="actual ${diff ? "diff" : ""}" title="${diff ? "與安排表目標不同" : ""}">${diff ? "⚠️ " : ""}${rep.k}K <small>(${rep.actualKm}K)</small></div>
            <div class="member-actions">
              <button class="icon-btn" data-action="edit" data-id="${rep.id}">✏️</button>
              <button class="icon-btn" data-action="del" data-id="${rep.id}">🗑️</button>
@@ -347,7 +348,10 @@ async function submitReport() {
     $("reportKm").value = ""; $("reportName").value = ""; reportDay = "";
     $("reportPreview").textContent = "　";
     updateDayPills();
-    showToast(`🃏 ${name} ${day} 抽到 ${k}K 卡！`);
+    const plan = planOf(name, day);
+    showToast(plan && plan.k !== k
+      ? `🃏 ${name} ${day} 抽到 ${k}K 卡（安排表目標 ${plan.k}K）`
+      : `🃏 ${name} ${day} 抽到 ${k}K 卡！`);
   } catch (e) {
     console.error(e); showToast("送出失敗：" + (e?.code || e?.message || e));
   } finally {
@@ -418,8 +422,27 @@ function switchTab(tab) {
 function updatePreview(inputId, previewId) {
   const km = parseFloat($(inputId).value);
   const el = $(previewId);
-  if (!km || km <= 0) { el.innerHTML = "　"; return; }
-  el.innerHTML = `${km}K → 進位後為 <b>${roundK(km)}K</b> 卡`;
+  if (!km || km <= 0) { el.innerHTML = "　"; el.classList.remove("warn"); return; }
+  const k = roundK(km);
+  let html = `${km}K → 進位後為 <b>${k}K</b> 卡`;
+  const plan = planForPreview(inputId);
+  const mismatch = plan && plan.k !== k;
+  if (mismatch) html += `<br>⚠️ 與安排表目標 <b>${plan.k}K</b> 不同，仍可回報，系統會依實跑 ${k}K 重新排順子`;
+  el.innerHTML = html;
+  el.classList.toggle("warn", !!mismatch);
+}
+
+// 取得預覽對應的安排表目標
+function planForPreview(inputId) {
+  if (inputId === "reportKm") {
+    const name = $("reportName").value;
+    return name && reportDay ? planOf(name, reportDay) : null;
+  }
+  if (inputId === "editKm" && editing) {
+    const src = reports.find(r => r.id === editing.id);
+    return src ? planOf(src.name, src.day) : null;
+  }
+  return null;
 }
 
 function showToast(msg) {
@@ -436,7 +459,7 @@ $("submitReport").addEventListener("click", submitReport);
 $("cancelEdit").addEventListener("click", closeModal);
 $("saveEdit").addEventListener("click", saveEdit);
 $("editModal").addEventListener("click", e => { if (e.target === $("editModal")) closeModal(); });
-$("reportName").addEventListener("change", updateDayPills);
+$("reportName").addEventListener("change", () => { updateDayPills(); updatePreview("reportKm", "reportPreview"); });
 $("reportKm").addEventListener("input", () => updatePreview("reportKm", "reportPreview"));
 $("editKm").addEventListener("input",   () => updatePreview("editKm", "editPreview"));
 $("modeAuto").addEventListener("click",   () => setMode("auto"));
@@ -447,6 +470,7 @@ $("reportDayPills").addEventListener("click", e => {
   if (!p || p.disabled) return;
   reportDay = p.dataset.day;
   updateDayPills();
+  updatePreview("reportKm", "reportPreview");
 });
 
 $("membersList").addEventListener("click", e => {

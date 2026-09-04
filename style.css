@@ -386,3 +386,8 @@ body {
 .day-row .actual small { font-family: var(--body); font-size: 11px; color: var(--ink-soft); font-weight: 500; }
 .day-row .member-actions { flex-direction: row; gap: 2px; }
 .day-row .icon-btn { font-size: 15px; }
+
+/* ── Mismatch warnings ── */
+.k-preview.warn { color: #b8691a; }
+.k-preview.warn b { color: #b8691a; }
+.day-row .actual.diff { color: #e0892c; }
