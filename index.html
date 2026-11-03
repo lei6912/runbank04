@@ -3,11 +3,11 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>5421跑者 17th 團結日 #02 順子大連線</title>
+  <title>5421跑者 17th 團結日 #03 跑順 BINGO 盤</title>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;500;700;900&family=Fredoka:wght@500;600;700&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="style.css?v=4" />
+  <link rel="stylesheet" href="style.css?v=1" />
 </head>
 <body>
   <div class="bg-blobs" aria-hidden="true">
@@ -17,20 +17,24 @@
   <div class="app">
     <!-- Hero -->
     <header class="hero">
-      <img src="hero.png" alt="5421跑者 17th 團結日02 順子大連線" class="hero-img" />
+      <img src="hero.jpg" alt="5421跑者 17th 團結日03 跑順BINGO盤" class="hero-img" />
       <div class="info-bar">
         <span class="info-pink">難易度 ★★★</span>
-        <span class="info-green">9.5 <b>六</b> — 9.6 <b>日</b>　順子大連線</span>
+        <span class="info-green">11.7 <b>六</b> — 11.8 <b>日</b>　跑順BINGO盤</span>
       </div>
-      <p class="hero-note">用全組兩天的里程湊出 5 張連續的 K 卡，就是一組順子！完成 1 組得 2 分，每多 1 組不同連號再 +1 分。</p>
+      <p class="hero-note">全組的里程點亮九宮格，連成 <b>1 條線</b>（橫、豎、斜）得 <b>2 分</b>；<br>九宮格<b>全部點亮</b>大滿貫，再加 <b>2 分</b>！</p>
     </header>
 
-    <!-- Progress -->
+    <!-- Board -->
     <section class="panel progress-card">
       <div class="progress-top">
         <div class="stat">
-          <span class="stat-label" id="progressSublabel">安排表目標</span>
-          <span class="stat-value"><span id="straightCount">0</span><small>組順子</small></span>
+          <span class="stat-label" id="progressSublabel">預計連線</span>
+          <span class="stat-value"><span id="lineCount">0</span><small>條線</small></span>
+        </div>
+        <div class="stat stat-mid">
+          <span class="stat-label">點亮格數</span>
+          <span class="stat-value green"><span id="litCount">0</span><small>/ 9</small></span>
         </div>
         <div class="stat stat-right">
           <span class="stat-label">小組積分</span>
@@ -38,57 +42,74 @@
         </div>
       </div>
 
-      <div class="mode-row" id="modeRow" style="display:none">
-        <span class="mode-label">順子分配</span>
-        <div class="mode-toggle">
-          <button class="mode-btn active" id="modeAuto" data-mode="auto">🤖 自動</button>
-          <button class="mode-btn" id="modeManual" data-mode="manual">✋ 手動</button>
+      <div class="bingo-wrap">
+        <div class="bingo-letters" aria-hidden="true">
+          <span class="l1">B</span><span class="l2">I</span><span class="l3">N</span><span class="l4">G</span><span class="l5">O</span>
         </div>
+        <div class="bingo" id="bingoBoard"></div>
       </div>
 
-      <div class="straights" id="straightsArea"></div>
+      <div class="line-tags" id="lineTags"></div>
       <div class="hint-box" id="hintBox" style="display:none"></div>
-      <div class="pool-wrap" id="poolArea"></div>
     </section>
 
     <!-- Tabs -->
     <div class="tab-wrap">
-      <button class="tab active" id="tabPlan">分組安排</button>
+      <button class="tab active" id="tabRegister">活動報名</button>
       <button class="tab" id="tabReport">里程回報</button>
     </div>
 
-    <!-- Plan notes -->
-    <section class="panel form-card" id="formPlan">
-      <div class="rule-list">
-        <div class="rule"><span class="rule-num">1</span><span class="rule-text">9/5、9/6 兩天的 K 卡<b>合併</b>排順子，哪天跑都可以。</span></div>
-        <div class="rule"><span class="rule-num">2</span><span class="rule-text">同一筆里程只能支援<b>一組</b>順子；兩天各跑一筆，可分別放進不同順子。</span></div>
-        <div class="rule"><span class="rule-num">3</span><span class="rule-text">相同的順子（例如兩組 5–9）只算<b>一組</b>，要多得分請湊不同連號。</span></div>
-        <div class="rule"><span class="rule-num">4</span><span class="rule-text">每位夥伴至少在六、日其中<b>一天</b>完成並上傳。</span></div>
+    <!-- Register form -->
+    <section class="panel form-card" id="formRegister">
+      <div class="form-row-header">
+        <label>姓名 *</label>
+        <span class="slots-left" id="slotsLeft">剩 — 位未報名</span>
       </div>
-      <p class="plan-tip">上方為安排表的四組目標，實際跑完請到「里程回報」回填，系統會自動用實跑 K 卡重新排順子。</p>
+      <select id="registerName" class="select-input">
+        <option value="">請選取組員...</option>
+      </select>
+
+      <label class="form-label">選擇要認領的格子 *（每人限選一格）</label>
+      <div class="picker" id="cellPicker"></div>
+
+      <div id="tailInputWrap" style="display:none">
+        <label class="form-label" id="tailLabel">預計里程 (K) *</label>
+        <input type="number" id="registerKm" class="text-input" placeholder="例如：11" step="1" min="1" inputmode="numeric" />
+      </div>
+      <p class="k-preview" id="registerPreview">　</p>
+      <button class="submit-btn" id="submitRegister">確認送出報名</button>
     </section>
 
     <!-- Report form -->
     <section class="panel form-card" id="formReport" style="display:none">
-      <div class="form-row-header">
-        <label>姓名 *</label>
-        <span class="slots-left" id="reportSlotsLeft">剩 — 筆未回報</span>
+      <div class="lock-banner" id="reportLockBanner">
+        <div class="lock-icon">🔒</div>
+        <div class="lock-text">
+          <strong>里程回報尚未開放</strong>
+          <span>請於 11/7（六）活動開始後再回填里程數</span>
+        </div>
       </div>
-      <select id="reportName" class="select-input">
-        <option value="">請選取組員...</option>
-      </select>
+      <div id="reportFormInner">
+        <div class="form-row-header">
+          <label>姓名 *</label>
+          <span class="slots-left" id="reportSlotsLeft">剩 — 位未回報</span>
+        </div>
+        <select id="reportName" class="select-input">
+          <option value="">請選取組員...</option>
+        </select>
+        <p class="k-preview" id="regHint">　</p>
 
-      <label class="form-label">跑步日期 *</label>
-      <div class="day-pills" id="reportDayPills">
-        <button class="day-pill" data-day="9/5">9/5 <span>六</span></button>
-        <button class="day-pill" data-day="9/6">9/6 <span>日</span></button>
+        <label class="form-label">跑步日期 *</label>
+        <div class="day-pills" id="reportDayPills">
+          <button class="day-pill" data-day="11/7">11/7 <span>六</span></button>
+          <button class="day-pill" data-day="11/8">11/8 <span>日</span></button>
+        </div>
+
+        <label class="form-label">實際完成里程 (K) *</label>
+        <input type="number" id="reportKm" class="text-input" placeholder="例如：7.15" step="0.01" min="0" inputmode="decimal" />
+        <p class="k-preview" id="reportPreview">　</p>
+        <button class="submit-btn report-btn" id="submitReport">確認送出里程</button>
       </div>
-      <p class="k-preview" id="planHint">　</p>
-
-      <label class="form-label">實際完成里程 (K) *</label>
-      <input type="number" id="reportKm" class="text-input" placeholder="例如：7.15" step="0.01" min="0" inputmode="decimal" />
-      <p class="k-preview" id="reportPreview">　</p>
-      <button class="submit-btn report-btn" id="submitReport">確認送出里程</button>
     </section>
 
     <!-- Brand -->
@@ -97,7 +118,7 @@
         <div class="brand-sub">RUNNING BANK</div>
         <div class="brand-name">BOGOTO</div>
       </div>
-      <div class="brand-num">02</div>
+      <div class="brand-num">03</div>
       <div class="brand-right">
         <div class="brand-sub">ENJOY 組</div>
         <div class="brand-tag">17TH 團結日</div>
@@ -112,9 +133,14 @@
     <!-- Edit modal -->
     <div class="modal-overlay" id="editModal" style="display:none">
       <div class="modal-box">
-        <h3 class="modal-title" id="editTitle">編輯里程</h3>
+        <h3 class="modal-title">編輯實際里程</h3>
         <p id="editName" class="modal-member"></p>
-        <label class="form-label" id="editLabel">實際完成里程 (K)</label>
+        <label class="form-label">跑步日期</label>
+        <div class="day-pills" id="editDayPills">
+          <button class="day-pill" data-day="11/7">11/7 <span>六</span></button>
+          <button class="day-pill" data-day="11/8">11/8 <span>日</span></button>
+        </div>
+        <label class="form-label">實際完成里程 (K)</label>
         <input type="number" id="editKm" class="text-input" step="0.01" min="0" inputmode="decimal" />
         <p class="k-preview" id="editPreview">　</p>
         <div class="modal-btns">
@@ -124,9 +150,22 @@
       </div>
     </div>
 
+    <!-- 5421 reminder modal -->
+    <div class="modal-overlay" id="remindModal" style="display:none">
+      <div class="modal-box remind-box">
+        <div class="remind-icon">🏦</div>
+        <h3 class="modal-title">跑銀 5421 提醒</h3>
+        <p class="remind-text" id="remindText">請確認當週已經達成跑銀5421紀錄</p>
+        <div class="modal-btns">
+          <button class="cancel-btn" id="remindCancel">再想想</button>
+          <button class="submit-btn" id="remindOk">已確認，送出</button>
+        </div>
+      </div>
+    </div>
+
     <div class="toast" id="toast"></div>
   </div>
 
-  <script type="module" src="app.js?v=4"></script>
+  <script type="module" src="app.js?v=1"></script>
 </body>
 </html>

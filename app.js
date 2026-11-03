@@ -1,7 +1,7 @@
 // ── Firebase ──────────────────────────────────────────────────────────
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
 import {
-  getDatabase, ref, push, set, update, remove, onValue
+  getDatabase, ref, push, update, remove, onValue
 } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-database.js";
 
 const firebaseConfig = {
@@ -17,111 +17,82 @@ const app = initializeApp(firebaseConfig);
 const db  = getDatabase(app);
 
 // ── 設定 ──────────────────────────────────────────────────────────────
-const REP_PATH = "event04/reports";            // 里程回報
-const SET_PATH = "event04/settings/straights"; // 順子分配設定
-const DAYS = ["9/5", "9/6"];
-const STRAIGHT_LEN = 5;
-const MAX_GROUPS   = 6;
+const REG_PATH = "event05/registrations"; // 報名（認領格子）
+const REP_PATH = "event05/reports";       // 里程回報
+const DAYS = ["11/7", "11/8"];
+const REPORT_OPEN_DATE = new Date("2026-11-07T00:00:00+08:00");
+const REMIND_MSG = "請確認當週已經達成跑銀5421紀錄";
 
 const ALL_MEMBERS = [
   "佳宜*雞蛋花", "志隆", "臣賢", "鄭伯", "鄭宏洋",
   "高聖智", "阿耀（＾∇＾）", "陳弘明", "雷皇正", "蔡若瑋"
 ];
 
-// 安排表（v12）：每人每天一個目標 K
-const PLAN = [
-  { group: "A", day: "9/5", cards: [["志隆", 3], ["雷皇正", 4], ["臣賢", 5], ["鄭伯", 6], ["蔡若瑋", 7]] },
-  { group: "B", day: "9/5", cards: [["陳弘明", 4], ["佳宜*雞蛋花", 5], ["鄭宏洋", 6], ["阿耀（＾∇＾）", 7], ["高聖智", 8]] },
-  { group: "C", day: "9/6", cards: [["臣賢", 5], ["志隆", 6], ["鄭伯", 7], ["雷皇正", 8], ["高聖智", 9]] },
-  { group: "D", day: "9/6", cards: [["阿耀（＾∇＾）", 6], ["陳弘明", 7], ["鄭宏洋", 8], ["蔡若瑋", 9], ["佳宜*雞蛋花", 10]] },
+// 九宮格（依海報排列）：上排 5K 6K 7K／中排 尾數1 尾數2 尾數3／下排 9K 10K 8K
+const CELLS = [
+  { id: "k5",  label: "5K",   k: 5,  color: "pink"   },
+  { id: "k6",  label: "6K",   k: 6,  color: "blue"   },
+  { id: "k7",  label: "7K",   k: 7,  color: "green"  },
+  { id: "t1",  label: "尾數1", tail: 1, color: "purple" },
+  { id: "t2",  label: "尾數2", tail: 2, color: "blue"   },
+  { id: "t3",  label: "尾數3", tail: 3, color: "green"  },
+  { id: "k9",  label: "9K",   k: 9,  color: "yellow" },
+  { id: "k10", label: "10K",  k: 10, color: "pink"   },
+  { id: "k8",  label: "8K",   k: 8,  color: "purple" },
 ];
-// 查表：planOf(name, day) → { k, group }
-const PLAN_MAP = {};
-PLAN.forEach(g => g.cards.forEach(([name, k]) => { PLAN_MAP[name + "|" + g.day] = { k, group: g.group }; }));
-const planOf = (name, day) => PLAN_MAP[name + "|" + day];
+const CELL = Object.fromEntries(CELLS.map((c, i) => [c.id, { ...c, idx: i }]));
+
+const LINES = [
+  { name: "上排",   cells: [0, 1, 2] },
+  { name: "中排",   cells: [3, 4, 5] },
+  { name: "下排",   cells: [6, 7, 8] },
+  { name: "左直排", cells: [0, 3, 6] },
+  { name: "中直排", cells: [1, 4, 7] },
+  { name: "右直排", cells: [2, 5, 8] },
+  { name: "斜線 ↘", cells: [0, 4, 8] },
+  { name: "斜線 ↙", cells: [2, 4, 6] },
+];
 
 // ── State ─────────────────────────────────────────────────────────────
-let reports    = [];
-let settings   = { mode: "auto", assignments: {} };
-let currentTab = "plan";
-let reportDay  = "";
-let editing    = null;
-let isSubmitting = false;
+let registrations = [];
+let reports       = [];
+let currentTab    = "register";
+let pickCell      = "";
+let reportDay     = "";
+let editing       = null; // { id, day }
+let isSubmitting  = false;
 
 const $ = id => document.getElementById(id);
 const esc = s => String(s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const isReportOpen = () => new Date() >= REPORT_OPEN_DATE;
 
 // ── 規則 ──────────────────────────────────────────────────────────────
-// 5421 跑銀進位：小數 > 0.11 進位
+// 5421 跑銀進位：小數 > 0.11 進位，否則捨去
 function roundK(km) {
   const whole = Math.floor(km);
   const dec   = parseFloat((km - whole).toFixed(10));
   return dec > 0.11 ? whole + 1 : whole;
 }
-function pointsFor(n) { return n === 0 ? 0 : 2 + (n - 1); }
-
-// 卡片：{ id, name, day, k, raw }
-function cardsFromReports() {
-  return reports.map(r => ({ id: r.id, name: r.name, day: r.day, k: r.k, raw: r.actualKm }));
+// K 數 → 對應格子（5~10K 為整數格；尾數 1/2/3 例如 1、11、21K）
+function cellOfK(k) {
+  if (k >= 5 && k <= 10) return "k" + k;
+  const d = k % 10;
+  if (k >= 1 && d >= 1 && d <= 3) return "t" + d;
+  return null;
 }
+const needsRemind = k => k >= 1 && k <= 3;
+const regOf = name => registrations.find(r => r.name === name);
+const repOf = name => reports.find(r => r.name === name);
 
-// 自動湊順子：由最小 K 起貪婪；同一起始值只允許一組（相同順子不重複計分）
-function computeStraights(cards) {
-  const pool = cards.filter(c => c.k >= 1).sort((a, b) => a.k - b.k);
-  const straights = [];
-  while (pool.length) {
-    const first = pool[0];
-    const v = first.k;
-    const picks = [first];
-    let ok = true;
-    for (let w = v + 1; w < v + STRAIGHT_LEN; w++) {
-      const c = pool.find(x => x.k === w);
-      if (!c) { ok = false; break; }
-      picks.push(c);
-    }
-    if (ok) {
-      straights.push(picks);
-      picks.forEach(p => pool.splice(pool.indexOf(p), 1));
-    }
-    // 不論成功與否，其餘同值 v 的卡都不可能再當起點 → 移除
-    for (let i = pool.length - 1; i >= 0; i--) if (pool[i].k === v) pool.splice(i, 1);
-  }
-  const usedIds = new Set(straights.flat().map(c => c.id));
-  return { straights, unused: cards.filter(c => !usedIds.has(c.id)) };
-}
-
-// 手動分組：檢查每組是否為 5 張連號，且起始值不與前面有效組重複
-function manualStraights(cards) {
-  const groups = {}, unused = [];
-  cards.forEach(c => {
-    const g = settings.assignments?.[c.id];
-    if (g) (groups[g] = groups[g] || []).push(c); else unused.push(c);
-  });
-  const seenStart = new Set();
-  const list = Object.keys(groups).map(Number).sort((a, b) => a - b).map(g => {
-    const cs = groups[g].sort((a, b) => a.k - b.k);
-    const ks = cs.map(c => c.k);
-    const consecutive = cs.length === STRAIGHT_LEN && ks[0] >= 1 && ks.every((k, i) => i === 0 || k === ks[i - 1] + 1);
-    const dup = consecutive && seenStart.has(ks[0]);
-    if (consecutive && !dup) seenStart.add(ks[0]);
-    return { group: g, cards: cs, valid: consecutive && !dup, dup };
-  });
-  return { groups: list, unused };
-}
-
-// 差一張就能再湊一組（且起始值尚未使用）的提示
-function nearMisses(unused, usedStarts) {
-  const have = new Set(unused.filter(c => c.k >= 1).map(c => c.k));
-  if (!have.size) return [];
-  const maxK = Math.max(...have);
-  const out = new Set();
-  for (let v = 1; v <= maxK; v++) {
-    if (usedStarts.has(v)) continue;
-    const missing = [];
-    for (let w = v; w < v + STRAIGHT_LEN; w++) if (!have.has(w)) missing.push(w);
-    if (missing.length === 1) out.add(missing[0]);
-  }
-  return [...out].sort((a, b) => a - b);
+// 依名單算出每格有哪些人 → 連線、點亮、積分
+function evaluate(entries) {
+  const byCell = CELLS.map(() => []);
+  entries.forEach(e => { const c = CELL[e.cell]; if (c) byCell[c.idx].push(e); });
+  const lit = byCell.map(list => list.length > 0);
+  const done = LINES.filter(l => l.cells.every(i => lit[i]));
+  const litCount = lit.filter(Boolean).length;
+  const points = (done.length ? 2 : 0) + (litCount === 9 ? 2 : 0);
+  return { byCell, lit, done, litCount, points };
 }
 
 // ── Firebase 監聽 ─────────────────────────────────────────────────────
@@ -130,19 +101,18 @@ function startListeners() {
 
   onValue(ref(db, ".info/connected"), snap => {
     if (snap.val() === true) console.log("✅ 已連上 Realtime Database:", firebaseConfig.databaseURL);
-    else showToast("⚠️ 尚未連上資料庫，請確認 databaseURL");
   });
 
   const toList = snap => Object.entries(snap.val() || {})
     .map(([id, d]) => ({ id, ...d }))
     .sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0));
 
+  onValue(ref(db, REG_PATH),
+    snap => { registrations = toList(snap); render(); },
+    err  => { console.error(err); showToast("⚠️ Firebase 連線失敗，請確認 Realtime Database 規則已開放 event05"); }
+  );
   onValue(ref(db, REP_PATH),
     snap => { reports = toList(snap); render(); },
-    err  => { console.error(err); showToast("⚠️ Firebase 連線失敗，請確認 Realtime Database 規則"); }
-  );
-  onValue(ref(db, SET_PATH),
-    snap => { settings = { mode: "auto", assignments: {}, ...(snap.val() || {}) }; if (!settings.assignments) settings.assignments = {}; render(); },
     err  => console.error(err)
   );
 }
@@ -155,203 +125,245 @@ function setBtn(id, loading, label) {
 
 // ── Render ────────────────────────────────────────────────────────────
 function render() {
-  renderProgress();
+  renderBoard();
+  renderRegisterForm();
   renderReportForm();
   renderMemberList();
 }
 
-function pcardHTML(c, i, extraClass = "") {
-  const color = i % 2 === 0 ? "" : "p";
-  const dayCls = c.day === "9/6" ? "d2" : "";
-  const title = c.raw != null ? `${c.name} ${c.day} ${c.raw}K → ${c.k}K` : `${c.name} ${c.day} 目標 ${c.k}K`;
-  return `
-    <div class="pcard ${color} ${extraClass}" title="${esc(title)}">
-      <span class="corner">${c.k}</span>
-      <span class="k">${c.k}K</span>
-      <span class="who">${esc(c.name)}</span>
-      <span class="day ${dayCls}">${esc(c.day)}</span>
-      <span class="corner br">${c.k}</span>
-    </div>`;
+function boardEntries() {
+  return currentTab === "report"
+    ? reports.filter(r => r.cell).map(r => ({ name: r.name, cell: r.cell, k: r.k }))
+    : registrations.map(r => ({ name: r.name, cell: r.cell, k: r.plannedK }));
 }
 
-function renderProgress() {
+function renderBoard() {
   const isReport = currentTab === "report";
-  const manual   = isReport && settings.mode === "manual";
-  const area = $("straightsArea"), pool = $("poolArea"), hint = $("hintBox");
-  hint.style.display = "none";
+  const ev = evaluate(boardEntries());
+  const inLine = new Set(ev.done.flatMap(l => l.cells));
 
-  $("modeRow").style.display = isReport ? "flex" : "none";
-  $("modeAuto").classList.toggle("active", settings.mode !== "manual");
-  $("modeManual").classList.toggle("active", settings.mode === "manual");
-  $("progressSublabel").textContent = isReport ? "實際湊出" : "安排表目標";
+  $("progressSublabel").textContent = isReport ? "實際連線" : "預計連線";
+  $("lineCount").textContent  = ev.done.length;
+  $("litCount").textContent   = ev.litCount;
+  $("pointCount").textContent = ev.points;
 
-  let count = 0;
-
-  if (!isReport) {
-    // 安排表：直接顯示 A~D 四組
-    const seen = new Set();
-    area.innerHTML = PLAN.map((g, gi) => {
-      const cards = g.cards.map(([name, k]) => ({ id: name + "|" + g.day, name, day: g.day, k }));
-      const start = cards[0].k, dup = seen.has(start); if (!dup) seen.add(start);
-      if (!dup) count++;
-      return `
-        <div class="straight ${dup ? "dup" : ""}" style="animation-delay:${gi * 80}ms">
-          <div class="straight-head">
-            <span class="tag">${g.group}組 · ${g.day}</span>
-            <span class="range">${cards[0].k}K → ${cards[4].k}K　<span class="grp">共 ${cards.reduce((s, c) => s + c.k, 0)}K</span></span>
-          </div>
-          <div class="hand">${cards.map((c, i) => pcardHTML(c, i)).join("")}</div>
-        </div>`;
+  $("bingoBoard").innerHTML = CELLS.map((c, i) => {
+    const people = ev.byCell[i];
+    const names = people.map(p => {
+      const kTag = c.tail ? `<em>${p.k}K</em>` : "";
+      return `<span class="who">${esc(p.name)}${kTag}</span>`;
     }).join("");
-    pool.innerHTML = "";
-  } else {
-    const cards = cardsFromReports();
-    if (!cards.length) {
-      area.innerHTML = `<p class="empty-state">還沒有人回報里程 🏃<br>跑完就來抽第一張 K 卡！</p>`;
-      pool.innerHTML = "";
-    } else if (manual) {
-      const { groups, unused } = manualStraights(cards);
-      count = groups.filter(g => g.valid).length;
-      area.innerHTML = groups.map(g => `
-        <div class="straight ${g.valid ? "" : g.dup ? "dup" : "invalid"}">
-          <div class="straight-head">
-            <span class="tag">${g.valid ? "✔ 順子" : g.dup ? "⚠ 重複不計分" : "✖ 未成立"} #${g.group}</span>
-            <span class="range">${g.cards.map(c => c.k + "K").join(" · ")}</span>
-          </div>
-          <div class="hand">${g.cards.map((c, i) => pcardHTML(c, i)).join("")}</div>
-        </div>`).join("") || `<p class="empty-state">請在下方為每張 K 卡指定組別</p>`;
-
-      const all = [...cards].sort((a, b) => a.k - b.k);
-      pool.innerHTML = `
-        <div class="pool-title"><span>✋ 手動分配（每張卡只能用在一組）</span><span>${unused.length} 張未使用</span></div>
-        <div class="assign-list">
-          ${all.map((c, i) => `
-            <div class="assign-row">
-              <div class="mini ${i % 2 ? "p" : ""}">${c.k}K</div>
-              <div class="info">
-                <div class="nm">${esc(c.name)}</div>
-                <div class="sub">${esc(c.day)} · ${c.raw}K</div>
-              </div>
-              <select data-assign="${c.id}">
-                <option value="">— 不用</option>
-                ${Array.from({ length: MAX_GROUPS }, (_, k) => k + 1).map(g =>
-                  `<option value="${g}" ${settings.assignments?.[c.id] == g ? "selected" : ""}>第 ${g} 組</option>`).join("")}
-              </select>
-            </div>`).join("")}
-        </div>`;
-    } else {
-      const { straights, unused } = computeStraights(cards);
-      count = straights.length;
-      area.innerHTML = straights.map((s, gi) => `
-        <div class="straight" style="animation-delay:${gi * 80}ms">
-          <div class="straight-head">
-            <span class="tag">✔ 順子 #${gi + 1}</span>
-            <span class="range">${s[0].k}K → ${s[4].k}K</span>
-          </div>
-          <div class="hand">${s.map((c, i) => pcardHTML(c, i)).join("")}</div>
-        </div>`).join("") || `<p class="empty-state">還沒湊成順子，繼續集卡 💪</p>`;
-
-      pool.innerHTML = unused.length ? `
-        <div class="pool-title"><span>🃏 手上還有的卡</span><span>${unused.length} 張</span></div>
-        <div class="pool">${[...unused].sort((a, b) => a.k - b.k).map((c, i) => pcardHTML(c, i)).join("")}</div>` : "";
-
-      const miss = nearMisses(unused, new Set(straights.map(s => s[0].k)));
-      if (miss.length) {
-        hint.style.display = "block";
-        hint.innerHTML = `💡 只差一張！再來一張 ${miss.map(k => `<b>${k}K</b>`).join(" 或 ")} 就能再多湊一組不同連號的順子。`;
-      }
-    }
-  }
-
-  $("straightCount").textContent = count;
-  $("pointCount").textContent    = pointsFor(count);
-}
-
-function renderReportForm() {
-  const repKey = new Set(reports.map(r => r.name + "|" + r.day));
-  const sel = $("reportName");
-  const prev = sel.value;
-  sel.innerHTML = '<option value="">請選取組員...</option>' +
-    ALL_MEMBERS.map(n => {
-      const done = DAYS.filter(d => repKey.has(n + "|" + d));
-      const tag = done.length === 2 ? "　✔ 兩天都已回報" : done.length === 1 ? `　✔ ${done[0]} 已回報` : "";
-      return `<option value="${esc(n)}">${esc(n)}${tag}</option>`;
-    }).join("");
-  if (ALL_MEMBERS.includes(prev)) sel.value = prev;
-  const pending = ALL_MEMBERS.length * 2 - reports.length;
-  $("reportSlotsLeft").textContent = `剩 ${Math.max(pending, 0)} 筆未回報`;
-  updateDayPills();
-}
-
-function updateDayPills() {
-  const name = $("reportName").value;
-  document.querySelectorAll("#reportDayPills .day-pill").forEach(p => {
-    const taken = name && reports.some(r => r.name === name && r.day === p.dataset.day);
-    p.disabled = !!taken;
-    if (taken && reportDay === p.dataset.day) reportDay = "";
-    p.classList.toggle("active", reportDay === p.dataset.day);
-  });
-  const hint = $("planHint");
-  if (name && reportDay) {
-    const plan = planOf(name, reportDay);
-    hint.innerHTML = plan ? `📋 安排表：${esc(name)} ${reportDay} 目標 <b>${plan.k}K</b>（${plan.group}組）` : `📋 安排表沒有排這天，跑了也可以回報`;
-  } else if (name) {
-    hint.innerHTML = DAYS.map(d => { const p = planOf(name, d); return p ? `${d} 目標 <b>${p.k}K</b>` : ""; }).filter(Boolean).join("　·　");
-  } else hint.innerHTML = "　";
-}
-
-function renderMemberList() {
-  const list = $("membersList");
-  const repMap = new Map(reports.map(r => [r.name + "|" + r.day, r]));
-
-  list.innerHTML = ALL_MEMBERS.map(name => {
-    const doneDays = DAYS.filter(d => repMap.has(name + "|" + d)).length;
-    const rows = DAYS.map(d => {
-      const plan = planOf(name, d), rep = repMap.get(name + "|" + d);
-      const dayCls = d === "9/6" ? "d2" : "";
-      const target = plan ? `目標 <b>${plan.k}K</b> · ${plan.group}組` : `未排`;
-      const diff = rep && plan && rep.k !== plan.k;
-      const actual = rep
-        ? `<div class="actual ${diff ? "diff" : ""}" title="${diff ? "與安排表目標不同" : ""}">${diff ? "⚠️ " : ""}${rep.k}K <small>(${rep.actualKm}K)</small></div>
-           <div class="member-actions">
-             <button class="icon-btn" data-action="edit" data-id="${rep.id}">✏️</button>
-             <button class="icon-btn" data-action="del" data-id="${rep.id}">🗑️</button>
-           </div>`
-        : `<div class="actual none">未回報</div>`;
-      return `<div class="day-row"><span class="chip ${dayCls}">${d}</span><div class="target">${target}</div>${actual}</div>`;
-    }).join("");
-    const status = doneDays === 0 ? `<span class="member-status">尚未完成</span>`
-                 : `<span class="member-status ok">✔ 已完成 ${doneDays} 天</span>`;
     return `
-      <div class="member-card">
-        <div class="member-head"><div class="member-name">${esc(name)}</div>${status}</div>
-        ${rows}
+      <div class="cell ${c.color} ${ev.lit[i] ? "lit" : ""} ${inLine.has(i) ? "in-line" : ""}" data-idx="${i}">
+        <span class="cell-label">${c.tail ? `<small>尾數</small>${c.tail}` : c.label}</span>
+        <div class="cell-names">${names || `<span class="empty">${isReport ? "待點亮" : "待認領"}</span>`}</div>
+        ${ev.lit[i] ? `<span class="stamp">${isReport ? "✔" : "📋"}</span>` : ""}
       </div>`;
+  }).join("") + `<svg class="line-layer" id="lineLayer"></svg>`;
+
+  requestAnimationFrame(() => drawLines(ev.done));
+
+  // 連線標籤
+  const tags = ev.done.map(l => `<span class="line-tag">✔ ${l.name}</span>`);
+  if (ev.litCount === 9) tags.unshift(`<span class="line-tag slam">🎉 大滿貫！</span>`);
+  $("lineTags").innerHTML = tags.join("");
+
+  // 提示：差一格就連線 / 大滿貫還差幾格
+  const hint = $("hintBox");
+  const missingLabel = i => `<b>${CELLS[i].label}</b>`;
+  const near = new Map();
+  LINES.forEach(l => {
+    const miss = l.cells.filter(i => !ev.lit[i]);
+    if (miss.length === 1) {
+      const i = miss[0];
+      if (!near.has(i)) near.set(i, []);
+      near.get(i).push(l.name);
+    }
+  });
+  const parts = [];
+  if (!ev.done.length && near.size) {
+    parts.push("💡 只差一格就連線！" + [...near].map(([i, ls]) => `補上 ${missingLabel(i)}（${ls.join("、")}）`).join("；"));
+  }
+  const missAll = CELLS.map((_, i) => i).filter(i => !ev.lit[i]);
+  if (ev.done.length && missAll.length && missAll.length <= 4) {
+    parts.push(`🏆 再點亮 ${missAll.map(missingLabel).join("、")} 就是大滿貫，再加 2 分！`);
+  }
+  if (!isReport && !registrations.length) parts.push("還沒有人認領格子，快來報名 💪");
+  hint.style.display = parts.length ? "block" : "none";
+  hint.innerHTML = parts.join("<br>");
+}
+
+function drawLines(done) {
+  const svg = $("lineLayer"), board = $("bingoBoard");
+  if (!svg || !board) return;
+  const br = board.getBoundingClientRect();
+  svg.setAttribute("viewBox", `0 0 ${br.width} ${br.height}`);
+  const center = i => {
+    const r = board.querySelector(`.cell[data-idx="${i}"]`).getBoundingClientRect();
+    return [r.left - br.left + r.width / 2, r.top - br.top + r.height / 2];
+  };
+  svg.innerHTML = done.map((l, n) => {
+    const [x1, y1] = center(l.cells[0]), [x2, y2] = center(l.cells[2]);
+    return `<line x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" style="animation-delay:${n * 120}ms" />`;
   }).join("");
 }
 
-// ── 送出里程 ──────────────────────────────────────────────────────────
+// ── 報名表 ────────────────────────────────────────────────────────────
+function renderRegisterForm() {
+  const regNames = new Set(registrations.map(r => r.name));
+  const sel = $("registerName");
+  const prev = sel.value;
+  const avail = ALL_MEMBERS.filter(n => !regNames.has(n));
+  sel.innerHTML = '<option value="">請選取組員...</option>' +
+    avail.map(n => `<option value="${esc(n)}">${esc(n)}</option>`).join("");
+  if (avail.includes(prev)) sel.value = prev;
+  $("slotsLeft").textContent = `剩 ${avail.length} 位未報名`;
+
+  const counts = {};
+  registrations.forEach(r => counts[r.cell] = (counts[r.cell] || 0) + 1);
+  $("cellPicker").innerHTML = CELLS.map(c => `
+    <button class="pick ${c.color} ${pickCell === c.id ? "active" : ""}" data-cell="${c.id}">
+      <span class="pick-label">${c.label}</span>
+      <span class="pick-count">${counts[c.id] ? `${counts[c.id]} 人` : "尚無人"}</span>
+    </button>`).join("");
+
+  const c = CELL[pickCell];
+  $("tailInputWrap").style.display = c && c.tail ? "block" : "none";
+  if (c && c.tail) $("tailLabel").textContent = `預計里程 (K) *　尾數需為 ${c.tail}，例如 ${c.tail}、1${c.tail}、2${c.tail}K`;
+  updateRegisterPreview();
+}
+
+// 回傳 { ok, k, msg }
+function checkRegister() {
+  const c = CELL[pickCell];
+  if (!c) return { ok: false, msg: "" };
+  if (!c.tail) return { ok: true, k: c.k, msg: `認領 <b>${c.label}</b> 格，活動當天請跑 ${c.k}K（${c.k - 1}.12～${c.k}.11K 皆算 ${c.k}K）` };
+  const raw = $("registerKm").value;
+  if (raw === "") return { ok: false, msg: `請填入尾數為 ${c.tail} 的 K 數` };
+  const km = parseFloat(raw);
+  if (!(km > 0)) return { ok: false, msg: "請輸入有效里程" };
+  const k = roundK(km);
+  const shown = k !== km ? `${km}K → 計為 <b>${k}K</b>` : `<b>${k}K</b>`;
+  if (k % 10 !== c.tail) return { ok: false, warn: true, msg: `${shown}，尾數不是 ${c.tail} ✖ 請改填 ${c.tail}、1${c.tail}、2${c.tail}K…` };
+  return { ok: true, k, msg: `${shown}，符合【${c.label}】✔` + (needsRemind(k) ? `<br>⚠️ ${REMIND_MSG}` : "") };
+}
+
+function updateRegisterPreview() {
+  const el = $("registerPreview");
+  const r = checkRegister();
+  el.innerHTML = r.msg || "　";
+  el.classList.toggle("warn", !!r.warn || (r.ok && needsRemind(r.k)));
+}
+
+async function submitRegister() {
+  if (isSubmitting) return;
+  const name = $("registerName").value;
+  if (!name) return showToast("請選取組員");
+  if (regOf(name)) return showToast("這位組員已報名，每人只能選一格");
+  if (!pickCell) return showToast("請選擇要認領的格子");
+  const chk = checkRegister();
+  if (!chk.ok) return showToast(CELL[pickCell].tail ? `K 數需符合尾數 ${CELL[pickCell].tail}` : "請確認格子");
+  if (needsRemind(chk.k) && !(await confirm5421(`${name} 報名 ${chk.k}K`))) return;
+
+  isSubmitting = true;
+  setBtn("submitRegister", true);
+  const cell = pickCell;
+  try {
+    await push(ref(db, REG_PATH), { name, cell, plannedK: chk.k, createdAt: Date.now() });
+    $("registerName").value = ""; $("registerKm").value = ""; pickCell = "";
+    renderRegisterForm();
+    showToast(`✅ ${name} 認領【${CELL[cell].label}】${CELL[cell].tail ? " " + chk.k + "K" : ""}！`);
+  } catch (e) {
+    console.error(e); showToast("送出失敗：" + (e?.code || e?.message || e));
+  } finally {
+    isSubmitting = false;
+    setBtn("submitRegister", false, "確認送出報名");
+  }
+}
+
+// ── 回報表 ────────────────────────────────────────────────────────────
+function renderReportForm() {
+  const locked = !isReportOpen();
+  $("reportLockBanner").style.display = locked ? "flex" : "none";
+  $("reportFormInner").style.display  = locked ? "none" : "block";
+
+  const repNames = new Set(reports.map(r => r.name));
+  const sel = $("reportName");
+  const prev = sel.value;
+  // 已報名的排前面
+  const avail = ALL_MEMBERS.filter(n => !repNames.has(n))
+    .sort((a, b) => (regOf(a) ? 0 : 1) - (regOf(b) ? 0 : 1));
+  sel.innerHTML = '<option value="">請選取組員...</option>' +
+    avail.map(n => {
+      const r = regOf(n);
+      const tag = r ? `　（認領 ${CELL[r.cell]?.label}${CELL[r.cell]?.tail ? " " + r.plannedK + "K" : ""}）` : "　（未報名）";
+      return `<option value="${esc(n)}">${esc(n)}${tag}</option>`;
+    }).join("");
+  if (avail.includes(prev)) sel.value = prev;
+  $("reportSlotsLeft").textContent = `剩 ${avail.length} 位未回報`;
+  updateRegHint();
+  updatePills("reportDayPills", reportDay);
+}
+
+function updateRegHint() {
+  const name = $("reportName").value, el = $("regHint");
+  if (!name) { el.innerHTML = "　"; return; }
+  const r = regOf(name);
+  el.innerHTML = r
+    ? `📋 報名認領：<b>${CELL[r.cell]?.label}</b>${CELL[r.cell]?.tail ? `（預計 ${r.plannedK}K）` : ""}`
+    : "📋 這位組員沒有報名，跑了也可以回報";
+}
+
+function updatePills(containerId, day) {
+  document.querySelectorAll(`#${containerId} .day-pill`).forEach(p =>
+    p.classList.toggle("active", p.dataset.day === day));
+}
+
+// 實跑預覽：進位後 K、點亮哪一格、是否與報名不同
+function reportPreviewHTML(name, raw) {
+  const km = parseFloat(raw);
+  if (!(km > 0)) return { html: "　", warn: false };
+  const k = roundK(km), cell = cellOfK(k);
+  let html = `${km}K → 計為 <b>${k}K</b>，` + (cell ? `點亮【${CELL[cell].label}】` : `不在 BINGO 盤上`);
+  let warn = false;
+  if (!cell) { html += `<br>⚠️ 這個里程不會點亮任何格子，仍可回報`; warn = true; }
+  const reg = name && regOf(name);
+  if (reg && cell && reg.cell !== cell) {
+    html += `<br>⚠️ 與報名的【${CELL[reg.cell]?.label}】不同，仍可回報，系統會依實跑點亮格子`; warn = true;
+  } else if (reg && !cell) {
+    html += `（報名為【${CELL[reg.cell]?.label}】）`;
+  }
+  if (needsRemind(k)) { html += `<br>⚠️ ${REMIND_MSG}`; warn = true; }
+  return { html, warn };
+}
+
+function updateReportPreview() {
+  const p = reportPreviewHTML($("reportName").value, $("reportKm").value);
+  $("reportPreview").innerHTML = p.html;
+  $("reportPreview").classList.toggle("warn", p.warn);
+}
+
 async function submitReport() {
+  if (!isReportOpen()) return showToast("⛔ 請於 11/7 再開始回報里程");
   if (isSubmitting) return;
   const name = $("reportName").value;
   const km   = parseFloat($("reportKm").value);
   if (!name) return showToast("請選取組員");
+  if (repOf(name)) return showToast("已回報過囉，請用下方 ✏️ 修改");
   if (!reportDay) return showToast("請選擇跑步日期");
-  if (!km || km <= 0) return showToast("請輸入有效里程");
-  if (reports.some(r => r.name === name && r.day === reportDay)) return showToast("這天已經回報過囉，請用下方 ✏️ 修改");
+  if (!(km > 0)) return showToast("請輸入有效里程");
 
-  const k = roundK(km), day = reportDay;
+  const k = roundK(km), cell = cellOfK(k), day = reportDay;
+  if (needsRemind(k) && !(await confirm5421(`${name} 回報 ${k}K`))) return;
+
   isSubmitting = true;
   setBtn("submitReport", true);
   try {
-    await push(ref(db, REP_PATH), { name, day, actualKm: km, k, createdAt: Date.now() });
+    await push(ref(db, REP_PATH), { name, day, actualKm: km, k, cell: cell || "", createdAt: Date.now() });
     $("reportKm").value = ""; $("reportName").value = ""; reportDay = "";
-    $("reportPreview").textContent = "　";
-    updateDayPills();
-    const plan = planOf(name, day);
-    showToast(plan && plan.k !== k
-      ? `🃏 ${name} ${day} 抽到 ${k}K 卡（安排表目標 ${plan.k}K）`
-      : `🃏 ${name} ${day} 抽到 ${k}K 卡！`);
+    $("reportPreview").innerHTML = "　"; $("reportPreview").classList.remove("warn");
+    updatePills("reportDayPills", "");
+    showToast(cell ? `🎯 ${name} 點亮【${CELL[cell].label}】！` : `✅ ${name} 已回報 ${k}K`);
   } catch (e) {
     console.error(e); showToast("送出失敗：" + (e?.code || e?.message || e));
   } finally {
@@ -360,26 +372,75 @@ async function submitReport() {
   }
 }
 
+// ── 組員列表 ──────────────────────────────────────────────────────────
+function renderMemberList() {
+  const list = $("membersList");
+  list.innerHTML = ALL_MEMBERS.map(name => {
+    const reg = regOf(name), rep = repOf(name);
+    const regCell = reg && CELL[reg.cell];
+    const repCell = rep && rep.cell && CELL[rep.cell];
+    const avatarCell = repCell || regCell;
+    const avatar = avatarCell
+      ? `<div class="avatar ${avatarCell.color} ${rep ? "" : "dim"}">${avatarCell.tail ? `<small>尾</small>${avatarCell.tail}` : avatarCell.label}</div>`
+      : `<div class="avatar blank">?</div>`;
+
+    const regRow = reg
+      ? `<div class="row"><span class="chip">報名</span><span class="row-text">認領 <b>${regCell?.label}</b>${regCell?.tail ? ` · ${reg.plannedK}K` : ""}</span>
+           <button class="icon-btn" data-action="delReg" data-id="${reg.id}" title="取消報名">🗑️</button></div>`
+      : `<div class="row"><span class="chip wait">報名</span><span class="row-text muted">尚未報名</span></div>`;
+
+    const diff = rep && reg && rep.cell !== reg.cell;
+    const repRow = rep
+      ? `<div class="row"><span class="chip done">${esc(rep.day)}</span>
+           <span class="row-text ${diff || !rep.cell ? "diff" : ""}">${diff || !rep.cell ? "⚠️ " : ""}${rep.actualKm}K → ${rep.k}K · ${repCell ? `點亮 <b>${repCell.label}</b>` : "未點亮格子"}</span>
+           <button class="icon-btn" data-action="edit" data-id="${rep.id}" title="修改">✏️</button>
+           <button class="icon-btn" data-action="delRep" data-id="${rep.id}" title="刪除回報">🗑️</button></div>`
+      : `<div class="row"><span class="chip wait">實跑</span><span class="row-text muted">未回報</span></div>`;
+
+    const status = rep ? `<span class="member-status ok">✔ 已回報</span>`
+                 : reg ? `<span class="member-status">已報名</span>`
+                 : `<span class="member-status">—</span>`;
+    return `
+      <div class="member-card">
+        ${avatar}
+        <div class="member-info">
+          <div class="member-head"><div class="member-name">${esc(name)}</div>${status}</div>
+          ${regRow}${repRow}
+        </div>
+      </div>`;
+  }).join("");
+}
+
 // ── 編輯 / 刪除 ───────────────────────────────────────────────────────
 function openEdit(id) {
   const src = reports.find(r => r.id === id);
   if (!src) return;
-  editing = { id };
-  $("editTitle").textContent = "編輯實際里程";
-  $("editLabel").textContent = "實際完成里程 (K)";
-  $("editName").textContent  = `${src.name} · ${src.day}`;
+  editing = { id, day: src.day };
+  $("editName").textContent = src.name;
   $("editKm").value = src.actualKm;
-  updatePreview("editKm", "editPreview");
+  updatePills("editDayPills", editing.day);
+  updateEditPreview();
   $("editModal").style.display = "flex";
 }
 function closeModal() { $("editModal").style.display = "none"; editing = null; }
+function updateEditPreview() {
+  if (!editing) return;
+  const src = reports.find(r => r.id === editing.id);
+  const p = reportPreviewHTML(src?.name, $("editKm").value);
+  $("editPreview").innerHTML = p.html;
+  $("editPreview").classList.toggle("warn", p.warn);
+}
 
 async function saveEdit() {
   if (!editing) return;
   const km = parseFloat($("editKm").value);
-  if (!km || km <= 0) return showToast("請輸入有效里程");
+  if (!(km > 0)) return showToast("請輸入有效里程");
+  const k = roundK(km), cell = cellOfK(k);
+  const src = reports.find(r => r.id === editing.id);
+  const { id, day } = editing;
+  if (needsRemind(k) && !(await confirm5421(`${src?.name || ""} 回報 ${k}K`))) return;
   try {
-    await update(ref(db, `${REP_PATH}/${editing.id}`), { actualKm: km, k: roundK(km) });
+    await update(ref(db, `${REP_PATH}/${id}`), { actualKm: km, k, cell: cell || "", day });
     closeModal(); showToast("✅ 已更新里程");
   } catch (e) { console.error(e); showToast("更新失敗：" + (e?.code || e?.message || e)); }
 }
@@ -389,60 +450,36 @@ async function deleteReport(id) {
   try { await remove(ref(db, `${REP_PATH}/${id}`)); showToast("已刪除里程紀錄"); }
   catch (e) { showToast("刪除失敗：" + (e?.code || e?.message || e)); }
 }
-
-// ── 順子分配模式 ──────────────────────────────────────────────────────
-async function setMode(mode) {
-  const next = { mode, assignments: { ...(settings.assignments || {}) } };
-  if (mode === "manual" && !Object.keys(next.assignments).length) {
-    const { straights } = computeStraights(cardsFromReports());
-    straights.forEach((s, gi) => s.forEach(c => next.assignments[c.id] = gi + 1));
-  }
-  settings = next; render();
-  try { await set(ref(db, SET_PATH), next); }
-  catch (e) { console.error(e); showToast("模式儲存失敗"); }
-}
-async function setAssignment(id, group) {
-  const assignments = { ...(settings.assignments || {}) };
-  if (group) assignments[id] = Number(group); else delete assignments[id];
-  settings = { ...settings, assignments }; render();
-  try { await set(ref(db, SET_PATH), settings); }
-  catch (e) { console.error(e); showToast("分配儲存失敗"); }
+async function deleteRegistration(id) {
+  if (!confirm("確定要取消這筆報名嗎？取消後可重新認領其他格子。")) return;
+  try { await remove(ref(db, `${REG_PATH}/${id}`)); showToast("已取消報名"); }
+  catch (e) { showToast("刪除失敗：" + (e?.code || e?.message || e)); }
 }
 
-// ── Tab / 預覽 / Toast ───────────────────────────────────────────────
+// ── 5421 提醒視窗 ─────────────────────────────────────────────────────
+function confirm5421(who) {
+  return new Promise(resolve => {
+    $("remindText").innerHTML = `${esc(who)}<br><b>${REMIND_MSG}</b>`;
+    $("remindModal").style.display = "flex";
+    const done = ok => {
+      $("remindModal").style.display = "none";
+      $("remindOk").onclick = $("remindCancel").onclick = null;
+      resolve(ok);
+    };
+    $("remindOk").onclick = () => done(true);
+    $("remindCancel").onclick = () => done(false);
+  });
+}
+
+// ── Tab / Toast ──────────────────────────────────────────────────────
 function switchTab(tab) {
   currentTab = tab;
-  $("formPlan").style.display   = tab === "plan"   ? "block" : "none";
-  $("formReport").style.display = tab === "report" ? "block" : "none";
-  $("tabPlan").classList.toggle("active",   tab === "plan");
-  $("tabReport").classList.toggle("active", tab === "report");
-  renderProgress();
-}
-
-function updatePreview(inputId, previewId) {
-  const km = parseFloat($(inputId).value);
-  const el = $(previewId);
-  if (!km || km <= 0) { el.innerHTML = "　"; el.classList.remove("warn"); return; }
-  const k = roundK(km);
-  let html = `${km}K → 進位後為 <b>${k}K</b> 卡`;
-  const plan = planForPreview(inputId);
-  const mismatch = plan && plan.k !== k;
-  if (mismatch) html += `<br>⚠️ 與安排表目標 <b>${plan.k}K</b> 不同，仍可回報，系統會依實跑 ${k}K 重新排順子`;
-  el.innerHTML = html;
-  el.classList.toggle("warn", !!mismatch);
-}
-
-// 取得預覽對應的安排表目標
-function planForPreview(inputId) {
-  if (inputId === "reportKm") {
-    const name = $("reportName").value;
-    return name && reportDay ? planOf(name, reportDay) : null;
-  }
-  if (inputId === "editKm" && editing) {
-    const src = reports.find(r => r.id === editing.id);
-    return src ? planOf(src.name, src.day) : null;
-  }
-  return null;
+  $("formRegister").style.display = tab === "register" ? "block" : "none";
+  $("formReport").style.display   = tab === "report"   ? "block" : "none";
+  $("tabRegister").classList.toggle("active", tab === "register");
+  $("tabReport").classList.toggle("active",   tab === "report");
+  renderBoard();
+  renderReportForm();
 }
 
 function showToast(msg) {
@@ -453,37 +490,49 @@ function showToast(msg) {
 }
 
 // ── 事件綁定 ──────────────────────────────────────────────────────────
-$("tabPlan").addEventListener("click",   () => switchTab("plan"));
-$("tabReport").addEventListener("click", () => switchTab("report"));
+$("tabRegister").addEventListener("click", () => switchTab("register"));
+$("tabReport").addEventListener("click",   () => switchTab("report"));
+$("submitRegister").addEventListener("click", submitRegister);
 $("submitReport").addEventListener("click", submitReport);
 $("cancelEdit").addEventListener("click", closeModal);
 $("saveEdit").addEventListener("click", saveEdit);
 $("editModal").addEventListener("click", e => { if (e.target === $("editModal")) closeModal(); });
-$("reportName").addEventListener("change", () => { updateDayPills(); updatePreview("reportKm", "reportPreview"); });
-$("reportKm").addEventListener("input", () => updatePreview("reportKm", "reportPreview"));
-$("editKm").addEventListener("input",   () => updatePreview("editKm", "editPreview"));
-$("modeAuto").addEventListener("click",   () => setMode("auto"));
-$("modeManual").addEventListener("click", () => setMode("manual"));
+
+$("cellPicker").addEventListener("click", e => {
+  const b = e.target.closest(".pick");
+  if (!b) return;
+  pickCell = b.dataset.cell;
+  renderRegisterForm();
+  if (CELL[pickCell].tail) $("registerKm").focus();
+});
+$("registerKm").addEventListener("input", updateRegisterPreview);
+
+$("reportName").addEventListener("change", () => { updateRegHint(); updateReportPreview(); });
+$("reportKm").addEventListener("input", updateReportPreview);
+$("editKm").addEventListener("input", updateEditPreview);
 
 $("reportDayPills").addEventListener("click", e => {
-  const p = e.target.closest(".day-pill");
-  if (!p || p.disabled) return;
-  reportDay = p.dataset.day;
-  updateDayPills();
-  updatePreview("reportKm", "reportPreview");
+  const p = e.target.closest(".day-pill"); if (!p) return;
+  reportDay = p.dataset.day; updatePills("reportDayPills", reportDay);
+});
+$("editDayPills").addEventListener("click", e => {
+  const p = e.target.closest(".day-pill"); if (!p || !editing) return;
+  editing.day = p.dataset.day; updatePills("editDayPills", editing.day);
 });
 
 $("membersList").addEventListener("click", e => {
   const b = e.target.closest("[data-action]");
   if (!b) return;
-  if (b.dataset.action === "edit") openEdit(b.dataset.id);
-  if (b.dataset.action === "del")  deleteReport(b.dataset.id);
+  const { action, id } = b.dataset;
+  if (action === "edit") {
+    if (!isReportOpen()) return showToast("⛔ 請於 11/7 再開始回報里程");
+    openEdit(id);
+  }
+  if (action === "delRep") deleteReport(id);
+  if (action === "delReg") deleteRegistration(id);
 });
 
-$("poolArea").addEventListener("change", e => {
-  const s = e.target.closest("select[data-assign]");
-  if (s) setAssignment(s.dataset.assign, s.value);
-});
+window.addEventListener("resize", () => renderBoard());
 
 // ── 初始化 ────────────────────────────────────────────────────────────
 startListeners();
