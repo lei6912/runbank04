@@ -25,8 +25,9 @@ const REMIND_MSG = "請確認當週已經達成跑銀5421紀錄";
 
 const ALL_MEMBERS = [
   "佳宜*雞蛋花", "志隆", "臣賢", "鄭伯", "鄭宏洋",
-  "高聖智", "阿耀（＾∇＾）", "陳弘明", "雷皇正", "蔡若瑋"
+  "高聖智", "陳弘明", "雷皇正", "蔡若瑋"
 ];
+const inRoster = r => ALL_MEMBERS.includes(r.name); // 不在名單的資料保留在資料庫，但不顯示、不計分
 
 // 九宮格（依海報排列）：上排 5K 6K 7K／中排 尾數1 尾數2 尾數3／下排 9K 10K 8K
 const CELLS = [
@@ -108,11 +109,11 @@ function startListeners() {
     .sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0));
 
   onValue(ref(db, REG_PATH),
-    snap => { registrations = toList(snap); render(); },
+    snap => { registrations = toList(snap).filter(inRoster); render(); },
     err  => { console.error(err); showToast("⚠️ Firebase 連線失敗，請確認 Realtime Database 規則已開放 event05"); }
   );
   onValue(ref(db, REP_PATH),
-    snap => { reports = toList(snap); render(); },
+    snap => { reports = toList(snap).filter(inRoster); render(); },
     err  => console.error(err)
   );
 }
